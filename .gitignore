@@ -1,0 +1,5 @@
+internal/
+__pycache__/
+build/
+res/
+obsidian.json
