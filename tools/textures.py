@@ -28,6 +28,7 @@ with Lanczos, the usual way to get a clean 2x from a 4x model.
 import argparse
 import csv
 import json
+import os
 import shutil
 import struct
 import subprocess
@@ -350,6 +351,46 @@ def encode(rgba, fmt, template):
     return bytes(head) + b"".join(levels)
 
 
+def find_texconv():
+    """texconv on the PATH, or where winget puts it, or None to compress with Pillow."""
+    found = shutil.which("texconv")
+    if found:
+        return Path(found)
+    packages = Path(os.environ.get("LOCALAPPDATA", "")) / "Microsoft" / "WinGet" / "Packages"
+    hits = sorted(packages.glob("Microsoft.DirectXTex.Texconv_*/texconv.exe"))
+    return hits[-1] if hits else None
+
+
+def encode_texconv(exe, png, fmt, template, folder, uniform):
+    """The same layout as encode(), compressed by texconv, which keeps more detail than Pillow: the original's header
+    with the new size and mip count, then every level. `uniform` is for packed masks, where no channel counts more."""
+    single = struct.unpack_from("<I", template, 28)[0] <= 1
+    cmd = [str(exe), "-nologo", "-y", "-dx9", "-sepalpha", "-if", "BOX", "-m", "1" if single else "0",
+           "-f", ALL_FORMATS[fmt], "-o", str(folder)]
+    if fmt == "DXT1":
+        cmd += ["-at", "0.5"]
+    if uniform and fmt != "ATI2":
+        cmd += ["-bc", "u"]
+    r = subprocess.run(cmd + [str(png)], capture_output=True, text=True)
+    out = folder / f"{png.stem}.dds"
+    if r.returncode != 0 or not out.exists():
+        raise RuntimeError(f"texconv failed: {r.stdout.strip()} {r.stderr.strip()}"[-400:])
+    data = out.read_bytes()
+    out.unlink()
+    h, w = struct.unpack_from("<II", data, 12)
+    mips = struct.unpack_from("<I", data, 28)[0]
+    body = data[148:] if data[84:88] == b"DX10" else data[128:]
+    block = 8 if fmt == "DXT1" else 16
+    def size(level):
+        return max(1, ((w >> level) + 3) // 4) * max(1, ((h >> level) + 3) // 4) * block
+    if len(body) != sum(size(i) for i in range(mips)):
+        raise RuntimeError(f"texconv wrote {len(body)} bytes for {w}x{h} with {mips} mips")
+    head = bytearray(template[:128])
+    struct.pack_into("<IIII", head, 12, h, w, size(0), 0)
+    struct.pack_into("<I", head, 28, mips)
+    return bytes(head) + body
+
+
 def cmd_pack(args):
     items, plan = load_json("list.json"), load_json("plan.json")
     exclude = excluded()
@@ -359,7 +400,8 @@ def cmd_pack(args):
         print(f"{len(items) - len(ready)} textures left out, not all of their images upscaled:",
               " ".join(t["name"] for t in items if t not in ready))
         items = ready
-    exe = Path(args.texconv) if args.texconv else None
+    exe = Path(args.texconv) if args.texconv else find_texconv()
+    print("compressing with", exe or "Pillow", flush=True)
     final, dds = WORK / "final", WORK / "dds"
     final.mkdir(exist_ok=True)
     dds.mkdir(exist_ok=True)
@@ -375,17 +417,13 @@ def cmd_pack(args):
             rgba[:, stripe, 0], rgba[:, stripe, 1], rgba[:, stripe, 2] = 255, 0, 255
         Image.fromarray(rgba).save(png)
         src = (WORK / "src" / f"{t['name']}.texture").read_bytes()
+        body = None
         if exe:
-            # texconv compresses better than Pillow; -dx9 keeps the classic header the game uses.
-            cmd = [str(exe), "-nologo", "-y", "-dx9", "-m", "0", "-f", ALL_FORMATS[t["format"]], "-o", str(dds), str(png)]
-            if t["format"] == "DXT1":
-                cmd[1:1] = ["-at", "0.5"]
-            r = subprocess.run(cmd, capture_output=True, text=True)
-            out = dds / f"{t['name']}.dds"
-            if r.returncode != 0 or not out.exists():
-                raise SystemExit(f"texconv failed on {t['name']}:\n{r.stdout}\n{r.stderr}")
-            body = out.read_bytes()
-        else:
+            try:
+                body = encode_texconv(exe, png, t["format"], src, dds, "rgb" not in plan[t["name"]])
+            except Exception as e:   # one texture falls back to Pillow; the run carries on
+                print(f"{t['name']}: {e}; using Pillow", flush=True)
+        if body is None:
             body = encode(rgba, t["format"], src)
         (res / f"{t['name']}.texture").write_bytes(body + src[-4:])
         kind = t.get("kind", "world")

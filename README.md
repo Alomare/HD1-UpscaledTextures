@@ -30,7 +30,7 @@ Interface textures (uncompressed ones and odd sizes: icons, menus, loading scree
 | `tools/zip_textures.py` | Zips the mod into `build/` |
 | `internal/work/` | Extracted, padded and upscaled images (about 8 GB) |
 
-Needs Windows, a DirectX 12 GPU, and Python with numpy, Pillow and onnxruntime-directml. The exported model goes in `internal/models/pbrify/v4_256.onnx`. The game is read from `HD1_CONTENTS`, or the default Steam folder.
+Needs Windows, a DirectX 12 GPU, Python with numpy, Pillow and onnxruntime-directml, and optionally texconv (`winget install Microsoft.DirectXTex.Texconv`) for better compression. The exported model goes in `internal/models/pbrify/v4_256.onnx`. The game is read from `HD1_CONTENTS`, or the default Steam folder.
 
 ## What the game has
 
@@ -47,7 +47,7 @@ Needs Windows, a DirectX 12 GPU, and Python with numpy, Pillow and onnxruntime-d
 - The model runs in overlapping 256 px tiles that blend together, so large textures show no seams.
 - The upscaler works at 4x; Lanczos brings the result down to 2x.
 - The broad colour and brightness of each result are then matched to the original. The blur used for that is wider than a DXT block, so the compression blocks stay gone.
-- Mips are rebuilt (or the top level alone, where the original has none) and compressed by Pillow. The header is the original's with only the size and mip count changed.
+- Mips are rebuilt (or the top level alone, where the original has none) and compressed by texconv, or by Pillow where texconv isn't installed. The header is the original's with only the size and mip count changed.
 - Every resize works channel by channel: Pillow resizes RGBA with colour weighted by alpha, which darkens colour under low alpha.
 - Cube maps and volume textures are skipped: Pillow reads only their first face or slice.
 - `check` compares each packed texture to the original (format, mip count, PSNR) and, with `--exclude`, adds the failures to the exclude list.

@@ -6,6 +6,7 @@ New, changed or removed features, one line each, brief and direct. The section f
 
 - Changed: Every texture is upscaled again with 4x-PBRify_UpscalerV4, a model trained on game textures. It removes compression damage and smears surfaces far less than the previous model.
 - Changed: Colour and brightness stay closer to the original art.
+- Changed: Better texture compression, which keeps more of the upscaled detail.
 - New: A thumbnail for Obsidian.
 
 ## 1.0.0
