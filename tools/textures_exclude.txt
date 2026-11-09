@@ -1,18 +1,3 @@
 # Textures that select leaves out, one hash per line; text after # is a note.
 # These failed check: shrunk back to the original size they no longer match it (PSNR under 24 dB).
 # Sizes are the originals.
-39a4bdbfea0dbd0b  # 256x256 DXT5, 21.2 dB
-f2cae502ad7af04c  # 256x256 DXT5, 21.9 dB
-7cf5abc20d160486  # 256x128 DXT5, 23.6 dB
-dd9b7fd11c32baef  # 128x128 DXT5, 23.7 dB
-132ea45b4847f147  # 128x128 DXT1, 23.4 dB
-47cd97da43e449b3  # 128x128 DXT1, 23.4 dB
-1477da54aa518f02  # 32x256 DXT5, 22.6 dB
-def6f2457437b4f5  # 16x256 DXT5, 20.5 dB
-e1c93a96f8354281  # 16x128 DXT5, 23.8 dB
-2e1d188eed4be9b6  # 256x256 ATI2, differs from the original (PSNR 23.2 dB)
-dd9acb5e26e4bd8b  # 64x32 DXT5, differs from the original (PSNR 23.2 dB)
-5befe61f2004137e  # 32x32 DXT5, differs from the original (PSNR 23.9 dB)
-c38a61e901c1613b  # 16x32 DXT5, differs from the original (PSNR 20.3 dB)
-fdb63c070b7c566a  # 18x18 rgb32, differs from the original (PSNR 22.1 dB)
-e8fd75b84dace19f  # 8x8 DXT5, differs from the original (PSNR 21.1 dB)

@@ -32,11 +32,12 @@ import shutil
 import struct
 import subprocess
 import sys
+import time
 from collections import defaultdict
 from pathlib import Path
 
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageFilter
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import stingray as st  # noqa: E402
@@ -172,11 +173,99 @@ def cmd_extract(args):
         print(f"{len(items) - len(keep)} skipped, {len(keep)} in the list")
 
 
+TILE, OVERLAP = 256, 32   # the fixed input size of the exported model, and how far tiles overlap
+
+
+def feather(n):
+    """Weights across a tile, rising over the overlap at each end, so tiles blend with no visible seam."""
+    ramp = np.minimum(np.arange(n) + 0.5, n - np.arange(n) - 0.5) / (OVERLAP * 4)
+    return np.minimum(ramp, 1.0).astype(np.float32)
+
+
+def tile_starts(size):
+    """Where tiles start along a side, the last one flush with the end."""
+    if size <= TILE:
+        return [0]
+    starts = list(range(0, size - TILE, TILE - OVERLAP))
+    return starts + [size - TILE]
+
+
+def session_for(model):
+    import onnxruntime as ort
+    opts = ort.SessionOptions()
+    opts.enable_mem_pattern = False
+    opts.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
+    return ort.InferenceSession(str(model), opts, providers=["DmlExecutionProvider", "CPUExecutionProvider"])
+
+
+def upscale_x4(session, rgb):
+    """The image at 4x, in overlapping tiles. Anything smaller than a tile is mirrored out to tile size and cropped back."""
+    h, w = rgb.shape[:2]
+    x = np.pad(rgb, ((0, max(0, TILE - h)), (0, max(0, TILE - w)), (0, 0)), mode="symmetric").astype(np.float32) / 255
+    H, W = x.shape[:2]
+    out, weight = np.zeros((H * 4, W * 4, 3), np.float32), np.zeros((H * 4, W * 4), np.float32)
+    wide = feather(TILE * 4)
+    mask = wide[None, :] * wide[:, None]
+    for top in tile_starts(H):
+        for left in tile_starts(W):
+            tile = x[top:top + TILE, left:left + TILE].transpose(2, 0, 1)[None]
+            y = session.run(None, {"input": tile})[0][0].transpose(1, 2, 0)
+            out[top * 4:(top + TILE) * 4, left * 4:(left + TILE) * 4] += y * mask[..., None]
+            weight[top * 4:(top + TILE) * 4, left * 4:(left + TILE) * 4] += mask
+    out = out / weight[..., None]
+    return (np.clip(out[:h * 4, :w * 4], 0, 1) * 255 + 0.5).astype(np.uint8)
+
+
+def match_low(hi, src, radius=3):
+    """Holds the broad colour and brightness of `hi` to the original `src`, which keeps the upscaler from shifting a
+    surface's tone. The blur is wider than a DXT block, so the compression blocks don't come back."""
+    h, w = src.shape[:2]
+    H, W = hi.shape[:2]
+    blur = lambda a: np.asarray(Image.fromarray(a).filter(ImageFilter.GaussianBlur(radius))).astype(np.float32)
+    small = np.asarray(Image.fromarray(hi).resize((w, h), Image.Resampling.BOX))
+    diff = blur(src) - blur(small)
+    wide = np.stack([np.asarray(Image.fromarray(diff[..., c]).resize((W, H), Image.Resampling.BICUBIC)) for c in range(3)], -1)
+    return (np.clip(hi + wide, 0, 255) + 0.5).astype(np.uint8)
+
+
+def cmd_upscale_onnx(args, todo, out):
+    session = session_for(args.onnx)
+    print("running on", session.get_providers()[0], flush=True)
+    failed, started = [], time.time()
+    for i, p in enumerate(todo):
+        try:
+            src = np.asarray(Image.open(p).convert("RGB"))
+            try:
+                x4 = upscale_x4(session, src)
+            except Exception as e:   # a lost graphics device: a new session usually carries on
+                print(f"{p.name}: retrying after {str(e)[:200]}", flush=True)
+                time.sleep(5)
+                session = session_for(args.onnx)
+                x4 = upscale_x4(session, src)
+            h, w = src.shape[:2]
+            hi = np.asarray(Image.fromarray(x4).resize((w * SCALE, h * SCALE), Image.Resampling.LANCZOS))
+            part = out / f"{p.stem}.part.png"
+            Image.fromarray(match_low(hi, src)).save(part)
+            part.replace(out / p.name)
+            spent = time.time() - started
+            print(f"{i + 1}/{len(todo)} {p.name} {w}x{h}  [{spent / 60:.0f} min, about {spent / (i + 1) * (len(todo) - i - 1) / 60:.0f} left]", flush=True)
+        except Exception as e:   # one image doesn't stop the rest; running the step again retries it
+            failed.append(p.name)
+            print(f"{i + 1}/{len(todo)} {p.name} FAILED: {e}", flush=True)
+    if failed:
+        raise SystemExit(f"{len(failed)} images failed: {' '.join(failed)}")
+
+
 def cmd_upscale(args):
-    src, out = WORK / "in", WORK / "up"
+    out = WORK / "up"
     out.mkdir(parents=True, exist_ok=True)
-    todo = [p for p in sorted(src.glob("*.png")) if not (out / p.name).exists()]
-    print(f"{len(todo)} images to upscale")
+    # Only the images of the textures still in the list: in/ can hold older ones.
+    items, plan, exclude = load_json("list.json"), load_json("plan.json"), excluded()
+    jobs = [WORK / "in" / f"{t['name']}__{tag}.png" for t in items if t["name"] not in exclude for tag in plan.get(t["name"], [])]
+    todo = [p for p in jobs if not (out / p.name).exists()]
+    print(f"{len(todo)} of {len(jobs)} images to upscale", flush=True)
+    if args.onnx:
+        return cmd_upscale_onnx(args, todo, out)
     if args.lanczos:
         for p in todo:
             im = Image.open(p)
@@ -310,7 +399,7 @@ def cmd_pack(args):
             old.unlink()
     kinds = [k for k in KINDS if any(t.get("kind", "world") == k for t in items)]
     manifest = {
-        "obsidian": 1, "id": "alomare.upscaledtextures", "version": "1.0.0",
+        "obsidian": 1, "id": "alomare.upscaledtextures", "version": "1.1.0", "image": "image.jpg",
         "name": {"en": "Upscaled Textures"},
         "description": {"en": f"{len(items)} of the game's textures at twice the size, upscaled by an AI model and compressed back to the game's own formats."},
         "authors": ["Alomare"], "source": "https://github.com/Alomare/HD1-UpscaledTextures", "scope": "client", "loader_api": 1,
@@ -380,6 +469,7 @@ def main():
     s.add_argument("--all", action="store_true", help="every texture: any shape, normal maps and uncompressed ones too")
     sub.add_parser("extract")
     u = sub.add_parser("upscale")
+    u.add_argument("--onnx", help="an exported model (tools/export_model.py), run on the GPU through DirectML")
     u.add_argument("--esrgan")
     u.add_argument("--model", default="realesrgan-x4plus")
     u.add_argument("--lanczos", action="store_true")
