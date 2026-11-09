@@ -1,3 +1,5 @@
 # Textures that select leaves out, one hash per line; text after # is a note.
 # These failed check: shrunk back to the original size they no longer match it (PSNR under 24 dB).
 # Sizes are the originals.
+ccf39a02b444fa01  # 256x256 DXT5, differs from the original (PSNR 23.2 dB)
+1511ecc338049d7a  # 8x16 DXT1, differs from the original (PSNR 22.1 dB)
