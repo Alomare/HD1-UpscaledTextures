@@ -19,6 +19,10 @@ several level bundles; plain DDS at offset 0, every mip, then a 4-byte category 
 DXT1, DXT3 and DXT5 at power-of-two sizes are taken; select --all adds ATI2 (normal maps) and the small
 ones. Uncompressed textures and odd sizes (interface) aren't taken, nor cube maps and volumes. Every copy is replaced, or the old texture shows wherever one was left out.
 
+Some textures hold several variants under one name, one per language flag (see copies()). select takes each
+variant that passes the same rules as an entry of its own, <texture>.<lang>; pack lists every variant of such a
+texture, upscaled where it was, the game's own where not, since a texture given as one file goes to every language.
+
 Channels: where R, G and B move together (a picture), they go to the upscaler as one RGB image; where they
 don't (packed masks: gloss, metal, occlusion), each goes alone as a grey image, so one map can't bleed into
 another. Alpha goes alone. Each job is padded by wrapping the opposite edge around, so tiling textures
@@ -80,29 +84,80 @@ def cmd_select(args):
         by[r["name"]].append(r)
     exclude = excluded()
     chosen = []
-    for name, copies in by.items():
-        if name in exclude:
-            continue
-        r = copies[0]
-        w, h = int(r["w"]), int(r["h"])
-        # World textures are powers of two; 1920x1080 and the like are loading screens and menus.
-        square_ish = w & (w - 1) == 0 and h & (h - 1) == 0
-        if args.all:
-            # Strips under 4 texels (ramps, single colours) gain nothing.
-            if r["format"] not in ALL_FORMATS or not square_ish or min(w, h) < 4 or not args.min <= max(w, h) <= args.max:
-                continue
-            kind = "normal" if r["format"] == "ATI2" else "world"
-        elif r["format"] in FORMATS and square_ish and args.min <= max(w, h) <= args.max:
-            kind = "world"
-        else:
+    for name, rows in by.items():
+        r = rows[0]
+        kind = eligible(r["format"], int(r["w"]), int(r["h"]), args)
+        if name in exclude or not kind:
             continue
         chosen.append({"name": name, "format": r["format"], "w": int(r["w"]), "h": int(r["h"]), "kind": kind,
-                       "bundles": sorted({c["bundle"] for c in copies})})
+                       "bundles": sorted({c["bundle"] for c in rows})})
     chosen.sort(key=lambda t: -t["w"] * t["h"])
     if args.limit:
         chosen = chosen[:args.limit]
+    # The other variants of those textures (see copies()), each its own entry, named <texture>.<lang>.
+    extra = []
+    for tex, per_bundle in copies({t["name"] for t in chosen}).items():
+        langs = defaultdict(list)
+        for b, vs in per_bundle.items():
+            for lang in vs:
+                if lang:
+                    langs[lang].append(b)
+        for lang, bundles in langs.items():
+            w, h, _, fmt, _ = ts.describe(per_bundle[bundles[0]][lang])
+            kind = eligible(fmt, w, h, args)
+            if kind and f"{tex}.{lang}" not in exclude:
+                extra.append({"name": f"{tex}.{lang}", "texture": tex, "lang": lang, "format": fmt, "w": w, "h": h,
+                              "kind": kind, "bundles": sorted(bundles)})
+    chosen += sorted(extra, key=lambda t: -t["w"] * t["h"])
     save_json("list.json", chosen)
-    print(f"{len(chosen)} textures, {sum(len(t['bundles']) for t in chosen)} copies ({len(exclude)} on the exclude list)")
+    print(f"{len(chosen) - len(extra)} textures and {len(extra)} other variants of them, "
+          f"{sum(len(t['bundles']) for t in chosen)} copies ({len(exclude)} on the exclude list)")
+
+
+def eligible(fmt, w, h, args):
+    """The kind of a texture select takes, or None."""
+    # World textures are powers of two; 1920x1080 and the like are loading screens and menus.
+    square_ish = w & (w - 1) == 0 and h & (h - 1) == 0
+    if not square_ish or not args.min <= max(w, h) <= args.max:
+        return None
+    if args.all:
+        # Strips under 4 texels (ramps, single colours) gain nothing.
+        if fmt not in ALL_FORMATS or min(w, h) < 4:
+            return None
+        return "normal" if fmt == "ATI2" else "world"
+    return "world" if fmt in FORMATS else None
+
+
+def copies(names, bundles=None):
+    """Every variant of the named textures that have more than one, {name: {bundle: {lang: bytes}}}.
+
+    A resource holds one variant per language flag, and the game takes the one for its setting, else 0. The font
+    atlases have one for Japanese, Chinese, Korean and Cyrillic text, each matching its own glyph table; some
+    world textures have others, whole different images, under flags that are no language the audio uses."""
+    wanted = {int(n, 16) for n in names}
+    out = {}
+    for b in [st.CONTENTS / b for b in bundles] if bundles else st.bundles():
+        raw = st.unpack(b)
+        if raw is None:
+            continue
+        (count,) = struct.unpack_from("<I", raw, 0)
+        pos = 260 + count * 16
+        for _ in range(count):
+            kind, name, n, _ = struct.unpack_from("<QQII", raw, pos)
+            pos += 24
+            heads = [struct.unpack_from("<III", raw, pos + 12 * i) for i in range(n)]
+            pos += 12 * n
+            at = pos
+            pos += sum(size for _, size, _ in heads)
+            if kind != ts.TEXTURE or name not in wanted or n < 2:
+                continue
+            vs = out.setdefault(f"{name:016x}", {}).setdefault(b.name, {})
+            for lang, size, stream in heads:
+                if stream:
+                    raise SystemExit(f"{name:016x} in {b.name}: variant {lang} has a streamed part, which pack can't carry")
+                vs[lang] = raw[at:at + size]
+                at += size
+    return out
 
 
 def excluded():
@@ -114,8 +169,11 @@ def excluded():
 
 
 def original(t):
+    tex, lang = t.get("texture", t["name"]), t.get("lang", 0)
+    if lang:
+        return copies({tex}, [t["bundles"][0]])[tex][t["bundles"][0]][lang]
     for k, n, (data, _) in ts.entries_with_streams(st.CONTENTS / t["bundles"][0]):
-        if k == ts.TEXTURE and f"{n:016x}" == t["name"]:
+        if k == ts.TEXTURE and f"{n:016x}" == tex:
             return data
     raise SystemExit(f"{t['name']} not in {t['bundles'][0]}")
 
@@ -407,8 +465,10 @@ def cmd_pack(args):
     dds.mkdir(exist_ok=True)
     res = MOD / "res"
     res.mkdir(parents=True, exist_ok=True)
-    resources = []
     for i, t in enumerate(items):
+        out = res / f"{t['name']}.texture"
+        if args.keep and out.exists() and header(out.read_bytes())[:2] == (t["w"] * SCALE, t["h"] * SCALE):
+            continue
         png = final / f"{t['name']}.png"
         rgba = assemble(t["name"], plan[t["name"]], t["w"], t["h"])
         if args.tint:   # a probe build: magenta stripes show where the game draws the new texture
@@ -425,28 +485,49 @@ def cmd_pack(args):
                 print(f"{t['name']}: {e}; using Pillow", flush=True)
         if body is None:
             body = encode(rgba, t["format"], src)
-        (res / f"{t['name']}.texture").write_bytes(body + src[-4:])
-        kind = t.get("kind", "world")
-        for b in t["bundles"]:
-            resources.append({"type": "texture", "name": f"#{t['name']}", "bundle": b, "data": f"res/{t['name']}.texture",
-                              "when": {kind: True}})
+        out.write_bytes(body + src[-4:])
         print(f"{i + 1}/{len(items)} {t['name']} -> {t['w'] * SCALE}x{t['h'] * SCALE} {ALL_FORMATS[t['format']]}, {len(t['bundles'])} bundles")
-    names = {f"{t['name']}.texture" for t in items}
+
+    # The resources, one per texture and bundle. A texture with variants lists each: the upscaled one where there
+    # is one, else the game's own, since a texture given as one file goes to every language.
+    mine = defaultdict(dict)   # texture -> lang -> entry
+    for t in items:
+        mine[t.get("texture", t["name"])][t.get("lang", 0)] = t
+    game = copies(set(mine))
+    names, resources = set(), []
+    for tex, ups in mine.items():
+        kind = (ups.get(0) or next(iter(ups.values()))).get("kind", "world")
+        for b in sorted({b for t in ups.values() for b in t["bundles"]} | set(game.get(tex, {}))):
+            langs = sorted(game.get(tex, {}).get(b, {0: None}))
+            if not any(lang in ups and b in ups[lang]["bundles"] for lang in langs):
+                continue
+            variants = []
+            for lang in langs:
+                file = f"{tex}.texture" if lang == 0 else f"{tex}.{lang}.texture"
+                if lang in ups and b not in ups[lang]["bundles"]:
+                    raise SystemExit(f"{file}: upscaled, but {b} isn't among its bundles")
+                if lang not in ups:
+                    (res / file).write_bytes(game[tex][b][lang])
+                names.add(file)
+                variants.append({"data": f"res/{file}"} | ({"lang": lang} if lang else {}))
+            r = {"type": "texture", "name": f"#{tex}", "bundle": b}
+            r.update({"variants": variants} if len(variants) > 1 else {"data": variants[0]["data"]})
+            resources.append({**r, "when": {kind: True}})
     for old in res.glob("*.texture"):
         if old.name not in names:
             old.unlink()
     kinds = [k for k in KINDS if any(t.get("kind", "world") == k for t in items)]
     manifest = {
-        "obsidian": 1, "id": "alomare.upscaledtextures", "version": "1.1.0", "image": "image.jpg",
+        "obsidian": 1, "id": "alomare.upscaledtextures", "version": "1.2.0", "image": "image.jpg",
         "name": {"en": "Upscaled Textures"},
-        "description": {"en": f"{len(items)} of the game's textures at twice the size, upscaled by an AI model and compressed back to the game's own formats."},
+        "description": {"en": f"{len(mine)} of the game's textures at twice the size, upscaled by an AI model and compressed back to the game's own formats."},
         "authors": ["Alomare"], "source": "https://github.com/Alomare/HD1-UpscaledTextures", "scope": "client", "loader_api": 1,
         "options": [{"id": k, "type": "toggle", "default": KINDS[k][2], "label": {"en": KINDS[k][0]}, "description": {"en": KINDS[k][1]}}
                     for k in kinds],
         "resources": resources,
     }
     (MOD / "obsidian.json").write_text(json.dumps(manifest, indent=1) + "\n", encoding="utf-8")
-    print(f"wrote {MOD / 'obsidian.json'}: {len(resources)} resources")
+    print(f"wrote {MOD / 'obsidian.json'}: {len(resources)} resources, {sum(len(u) for u in mine.values())} upscaled variants of {len(mine)} textures")
 
 
 def header(data):
@@ -515,6 +596,7 @@ def main():
     p = sub.add_parser("pack")
     p.add_argument("--texconv")
     p.add_argument("--tint", action="store_true", help="probe build only: magenta stripes over each texture")
+    p.add_argument("--keep", action="store_true", help="keep textures already in res/ instead of compressing them again")
     c = sub.add_parser("check")
     c.add_argument("--exclude", action="store_true", help="add each texture that fails to tools/textures_exclude.txt")
     sub.add_parser("status")
