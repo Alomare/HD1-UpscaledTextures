@@ -518,7 +518,7 @@ def cmd_pack(args):
             old.unlink()
     kinds = [k for k in KINDS if any(t.get("kind", "world") == k for t in items)]
     manifest = {
-        "obsidian": 1, "id": "alomare.upscaledtextures", "version": "1.2.0", "image": "image.jpg",
+        "obsidian": 1, "id": "alomare.upscaledtextures", "version": "1.2.0", "image": "icon.jpg",
         "name": {"en": "Upscaled Textures"},
         "description": {"en": f"{len(mine)} of the game's textures at twice the size, upscaled by an AI model and compressed back to the game's own formats."},
         "authors": ["Alomare"], "source": "https://github.com/Alomare/HD1-UpscaledTextures", "scope": "client", "loader_api": 1,
