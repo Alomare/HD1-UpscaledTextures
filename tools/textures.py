@@ -520,7 +520,7 @@ def cmd_pack(args):
     manifest = {
         "obsidian": 1, "id": "alomare.upscaledtextures", "version": "1.2.0", "image": "icon.jpg",
         "name": {"en": "Upscaled Textures"},
-        "description": {"en": f"{len(mine)} of the game's textures at twice the size, upscaled by an AI model and compressed back to the game's own formats."},
+        "description": {"en": "Most of the world and normal map textures upscaled to 2x by an AI model."},
         "authors": ["Alomare"], "source": "https://github.com/Alomare/HD1-UpscaledTextures", "scope": "client", "loader_api": 1,
         "options": [{"id": k, "type": "toggle", "default": KINDS[k][2], "label": {"en": KINDS[k][0]}, "description": {"en": KINDS[k][1]}}
                     for k in kinds],
