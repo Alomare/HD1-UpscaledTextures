@@ -2,6 +2,11 @@
 
 New, changed, fixed or removed features, one line each, brief and direct. The section for a release becomes the release notes.
 
+## 1.2.1
+
+- Changed: a shorter description in Obsidian and the store.
+- Changed: a new icon.
+
 ## 1.2.0
 
 - Changed: Japanese, Chinese, Korean and Russian text shows correctly again. Each of these languages uses a separate font texture, and the mod no longer replaces that texture with the English one.
