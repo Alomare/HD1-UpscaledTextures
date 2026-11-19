@@ -1,0 +1,102 @@
+# Uploads a release's zip to Nexus Mods as a new version of the Upscaled Textures file on the Helldivers Remastered
+# page (nexusmods.com/helldivers/mods/48). The version's changelog goes there too, one entry per change. The file's
+# title and description are the ones on the page, set by hand there, and stay as they are (tools/nexus_release.py).
+# The page's other file, Enhanced Visuals, is left alone.
+# A release of this mod is made by hand (CLAUDE.md), so publishing one starts this; it can also run from the Actions
+# tab for a tag that's already out. Pre-releases and tags with a suffix are never uploaded.
+#
+# Needs the repository secret NEXUS_API_KEY (a Nexus Mods API key; Settings, Secrets and variables, Actions).
+# Without it the run stops with a message and nothing is uploaded.
+# Never run it with debug logging on: the upload action writes the API key into the debug log. GitHub masks it, but
+# the logs of a public repository are open to anyone.
+name: Nexus Mods
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to upload (for example v1.2.1)
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nexus-${{ inputs.tag || github.event.release.tag_name }}
+  cancel-in-progress: false
+
+env:
+  NEXUS_MOD_ID: '15255723835440'   # the Unique Mod ID (Files tab, Advanced)
+  NEXUS_FILE_ID: '8348451'         # the File ID under API (Files tab, Advanced) of the Upscaled Textures file
+  MOD: alomare.upscaledtextures    # the zip is <MOD>-<version>.zip; obsidian.json is generated, not in the repository
+  TAG: ${{ inputs.tag || github.event.release.tag_name }}
+
+jobs:
+  nexus:
+    if: ${{ github.event_name == 'workflow_dispatch' || (!github.event.release.prerelease && !contains(github.event.release.tag_name, '-')) }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+
+      - name: Check the API key is set
+        env:
+          KEY: ${{ secrets.NEXUS_API_KEY }}
+        run: |
+          if [ -z "$KEY" ]; then
+            echo "::error::Add the NEXUS_API_KEY repository secret (Settings, Secrets and variables, Actions) first."
+            exit 1
+          fi
+
+      - name: Download the release zip
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if ! gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json tagName >/dev/null 2>&1; then
+            echo "::error::No published release with the tag $TAG."
+            exit 1
+          fi
+          [ "$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json isDraft,isPrerelease -q '.isDraft or .isPrerelease')" = false ] \
+            || { echo "::error::$TAG is a draft or a pre-release: not uploaded."; exit 1; }
+          case "$TAG" in *-*) echo "::error::$TAG has a suffix: not uploaded."; exit 1;; esac
+          VERSION="${TAG#v}"
+          ZIP="${MOD}-${VERSION}.zip"
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern "$ZIP"
+          test -s "$ZIP" || { echo "::error::$ZIP is missing from the release $TAG."; exit 1; }
+          python3 tools/nexus_release.py lines "$VERSION" | grep -q . \
+            || { echo "::error::CHANGELOG.md has no section for $VERSION."; exit 1; }
+          { echo "VERSION=$VERSION"; echo "ZIP=$ZIP"; } >> "$GITHUB_ENV"
+
+      - name: The file's title and description on the page now
+        id: page
+        run: python3 tools/nexus_release.py files >> "$GITHUB_OUTPUT"
+
+      # The action gets the API key, so it is pinned to the commit of the tag v1.0.0-beta.11 (a tag can be moved);
+      # a new version of the action means a new commit here. Obsidian installs the mod, so there is no Mod Manager
+      # Download button. The new version is the primary file, the one the page's download buttons point to; the
+      # archived one loses the tag. The page's own version is left alone: the page carries Enhanced Visuals too,
+      # which follows separate versions.
+      - name: Upload Upscaled Textures
+        uses: Nexus-Mods/upload-action@98532f7670c27cbecc78fae03fa3e278147827e2  # v1.0.0-beta.11
+        with:
+          api_key: ${{ secrets.NEXUS_API_KEY }}
+          file_id: ${{ env.NEXUS_FILE_ID }}
+          filename: ${{ env.ZIP }}
+          version: ${{ env.VERSION }}
+          display_name: ${{ steps.page.outputs.name }}
+          description: ${{ steps.page.outputs.description }}
+          category: main
+          archive_existing_version: true
+          primary_mod_manager_download: true
+          allow_mod_manager_download: false
+          update_mod_version: false
+          mod_id: ${{ env.NEXUS_MOD_ID }}
+
+      # After the upload, so the version is on the page. One entry per change line; lines already there are skipped.
+      - name: Changelog on Nexus
+        env:
+          NEXUS_API_KEY: ${{ secrets.NEXUS_API_KEY }}
+        run: python3 tools/nexus_release.py changelog "$VERSION"
