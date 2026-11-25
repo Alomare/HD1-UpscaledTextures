@@ -1,12 +1,12 @@
 # Upscaled Textures
 
-The textures of HELLDIVERS (2015) at twice the size, upscaled by an AI model ([4x-PBRify_UpscalerV4](https://github.com/Kim2091/Kim2091-Models/releases/tag/4x-PBRify_UpscalerV4) by Kim2091, CC0) and compressed back to the game's own formats, for the [Obsidian](https://github.com/Alomare/ObsidianModManager) mod manager. Download `alomare.upscaledtextures-<version>.zip` from the Releases page and import the zip into Obsidian. The mod works with or without [Enhanced Visuals](https://github.com/Alomare/HD1-EnhancedVisuals).
+The textures of HELLDIVERS (2015) at twice the size, upscaled by an AI model ([4x-PBRify_UpscalerV4](https://github.com/Kim2091/Kim2091-Models/releases/tag/4x-PBRify_UpscalerV4) by Kim2091, CC0) and compressed back to the game formats, for the [Obsidian](https://github.com/Alomare/ObsidianLauncher) mod manager. Download `alomare.upscaledtextures-<version>.zip` from the Releases page and import the zip into Obsidian. Works with or without [Enhanced Visuals](https://github.com/Alomare/HD1-EnhancedVisuals).
 
 The model is trained on game textures and removes compression damage. It still adds some detail that the original art didn't have.
 
-Before 1.0.0 this mod was called Enhanced Textures. Obsidian treats the new name as a different mod, so remove Enhanced Textures before importing this one.
+Before 1.0.0, this mod was called Enhanced Textures. Obsidian treats the new name as a different mod, so remove Enhanced Textures before importing this one.
 
-The mod has two on/off options, one per kind of texture:
+2 on/off options, one per texture type:
 
 | Option | Default | What it covers |
 |---|---|---|
